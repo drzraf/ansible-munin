@@ -1,82 +1,74 @@
-import os,re
-from ansible import utils
-from ansible.utils.template import template
-from ansible.runner.return_data import ReturnData
-from ansible.callbacks import callback_plugins
+#!/usr/bin/pytho
+# -*- coding: utf-8 -*-
 
-class ActionModule(object):
+# (c) 2016, Raphaël Droz <raphael.droz@gmail.com>
+#
+# This file is part of Ansible
+#
+# Ansible is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Ansible is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
-    def __init__(self, runner):
-        self.runner = runner
+import os, re
+from ansible.plugins.action import ActionBase
 
-    def run(self, conn, tmp, module_name, module_args, inject, complex_args=None, **kwargs):
-        if inject['munin_role_node'] is False:
+class ActionModule(ActionBase):
+
+    TRANSFERS_FILES = True
+
+    def run(self, tmp=None, task_vars=None):
+        result = super(ActionModule, self).run(tmp, task_vars)
+
+        if task_vars.get('munin_role_node') is False:
             raise Exception("munin_plugin: Target host is not a munin node!")
 
-        # Load up options.
-        options  = {}
-        if complex_args:
-            options.update(complex_args)
-
-        options.update(utils.parse_kv(module_args))
-
-        name = options.get('name')
-        instance = options.get('instance', name)
-        plugin_file = options.get('file', None)
-        config = options.get('config', None)
+        name = self._task.args.get('name')
+        instance = self._task.args.get('instance', name)
+        plugin_file = self._task.args.get('file', None)
+        config = self._task.args.get('config', None)
         changed = False
 
-        # Copy plugin file.
-        if plugin_file is not None:
-            module_args = 'src=%s dest=%s' % (plugin_file, dest)
-            return_data = self.runner._execute_module(conn, tmp, 'copy', module_args, inject=inject)
-            #TODO# Check result.
-            if return_data.result.has_key('failed'):
-                return return_data
-            elif return_data.result['changed']:
-                changed = True
-
+        # Copy plugin file: TODO (dest)
+        if plugin_file:
+            result.update(self._execute_module(module_name='copy',
+                                               module_args=dict(src=plugin_file, dest=dest),
+                                               task_vars=task_vars))
+        # Symlink
         if name and not '*' in instance:
             # Ensure plugin path.
-            if plugin_file is not None:
-                plugin_path = os.path.join(inject['munin_node_dir_plugins_custom'], name)
+            if plugin_file:
+                plugin_path = os.path.join(task_vars.get('munin_node_dir_plugins_custom'), name)
             else:
-                plugin_path = os.path.join(inject['munin_node_dir_plugins_share'], name)
+                plugin_path = os.path.join(task_vars.get('munin_node_dir_plugins_share'), name)
 
             # Create symlink to plugin.
-            path = os.path.join(inject['munin_node_dir_plugins'], instance)
-            module_args = 'state=link path=%s src=%s' % (path, plugin_path)
-            return_data = self.runner._execute_module(conn, tmp, 'file', module_args, inject=inject)
-            if return_data.result.has_key('failed'):
-                return return_data
-            elif return_data.result['changed']:
-                changed = True
+            path = os.path.join(task_vars.get('munin_node_dir_plugins'), instance)
+            result.update(self._execute_module(module_name='file',
+                                               module_args=dict(state='link', path=path, src=plugin_path),
+                                               task_vars=task_vars))
 
-        # Set plugin configuration.
-        if config is not None:
-            action_path = utils.plugins.action_loader.find_plugin(module_name)
-            src = os.path.realpath(os.path.dirname(action_path) + '/../templates/plugin_conf.j2')
-            dest = os.path.join(inject['munin_node_dir_plugins_conf'], '%s.conf' % (re.sub(ur"\*", "", instance)))
+        # Set plugin configuration
+        if config:
+            plugin_conf = '''# Managed by Ansible
 
-            inject['instance'] = instance
-            inject['config'] = config
-            module_args = 'mode=600 src=%s dest=%s' % (src, dest)
-            handler = utils.plugins.action_loader.get('template', self.runner)
-            return_data = handler.run(conn, tmp, 'template', module_args, inject)
-            if return_data.result.has_key('failed'):
-                return return_data
-            elif return_data.result['changed']:
-                changed = True
-
-        # Dirty service notification.
-        if changed:
-            cp = callback_plugins[0]
-            handler_name = 'restart munin-node'
-            cp.playbook._flag_handler(cp.play, template(cp.play.basedir, handler_name, cp.task.module_vars), inject['inventory_hostname'])
-
-        result = dict()
-        result['changed'] = changed
-        if changed:
-            result['msg'] = 'Munin plugin %s installed.' % ( name if name else instance )
-        return ReturnData(conn=conn, comm_ok=True, result=result)
-
+[%s]
+%s
+''' % (instance, config)
+            if not tmp:
+                tmp = self._make_tmp_path()
+            src = self._transfer_data(self._connection._shell.join_path(tmp, 'source'), plugin_conf)
+            dest = os.path.join(task_vars.get('munin_node_dir_plugins_conf'), '%s.conf' % (re.sub(ur"\*", "", instance)))
+            result.update(self._execute_module(module_name='copy',
+                                               module_args=dict(mode='0600', owner='root', group='root', src=src, dest=dest),
+                                               task_vars=task_vars,
+                                               tmp=tmp))
+        return result
