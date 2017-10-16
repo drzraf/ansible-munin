@@ -1,4 +1,0 @@
-# workaround https://github.com/ansible/ansible/issues/15746
-- name: Declare node in master
-  template: src="munin-host.j2" dest="{{ munin_master_includedir }}/{{ ansible_fqdn }}_{{ munin_node_port }}" backup=no owner=root group=root mode=0644
-  delegate_to: "{{ munin_master_ip }}"
