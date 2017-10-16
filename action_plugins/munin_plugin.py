@@ -1,4 +1,4 @@
-#!/usr/bin/pytho
+#!/usr/bin/python
 # -*- coding: utf-8 -*-
 
 # (c) 2016, Raphaël Droz <raphael.droz@gmail.com>
